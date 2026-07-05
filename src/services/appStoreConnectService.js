@@ -1,4 +1,5 @@
 import * as jose from 'jose'
+import { callChatCompletion } from './translationService.js'
 
 // Use proxy to avoid CORS
 // In production, set VITE_ASC_PROXY_URL to your Cloudflare Worker URL
@@ -620,8 +621,6 @@ function hardTruncate(text, limit) {
 }
 
 export async function translateAppStoreContent(text, targetLocale, aiConfig, fieldType = 'description', customPrompt = null) {
-  const { provider, apiKey, model, region } = aiConfig
-
   // Character limits per field type
   const charLimits = {
     description: 4000,
@@ -640,122 +639,13 @@ export async function translateAppStoreContent(text, targetLocale, aiConfig, fie
 
   const systemMessage = buildSystemPrompt(customPrompt, { localeName, limit, fieldType })
 
+  // Plain-text completion (no JSON mode) — ASC fields are raw strings.
+  // Provider dispatch lives in translationService so every provider it
+  // supports (OpenAI, Azure, Bedrock, GitHub, DeepSeek, Cloudflare,
+  // Anthropic, Google) works here too.
   const callProvider = async (sysMsg, userMsg) => {
-    let content
-
-    if (provider === 'openai') {
-      console.log('[ASC Translation] Calling OpenAI API...')
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: sysMsg },
-            { role: 'user', content: userMsg }
-          ],
-        })
-      })
-
-      const result = await response.json()
-      console.log('[ASC Translation] OpenAI response:', result.error ? result.error : 'OK')
-      if (result.error) throw new Error(result.error.message || JSON.stringify(result.error))
-      if (!result.choices?.[0]?.message?.content) {
-        throw new Error(`Invalid OpenAI API response: ${JSON.stringify(result).slice(0, 200)}`)
-      }
-      content = result.choices[0].message.content.trim()
-    } else if (provider === 'azure') {
-      console.log('[ASC Translation] Calling Azure OpenAI API...')
-      const { endpoint } = aiConfig
-      if (!endpoint) {
-        throw new Error('Azure endpoint is required')
-      }
-      let baseUrl = endpoint.replace(/\/+$/, '')
-      const openaiIndex = baseUrl.indexOf('/openai/')
-      if (openaiIndex !== -1) {
-        baseUrl = baseUrl.substring(0, openaiIndex)
-      }
-      const url = `${baseUrl}/openai/deployments/${encodeURIComponent(model)}/chat/completions?api-version=2025-01-01-preview`
-
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: sysMsg },
-            { role: 'user', content: userMsg }
-          ],
-        })
-      })
-
-      const result = await response.json()
-      console.log('[ASC Translation] Azure response:', result.error ? result.error : 'OK')
-      if (result.error) throw new Error(result.error.message || JSON.stringify(result.error))
-      if (!result.choices?.[0]?.message?.content) {
-        throw new Error(`Invalid Azure API response: ${JSON.stringify(result).slice(0, 200)}`)
-      }
-      content = result.choices[0].message.content.trim()
-    } else if (provider === 'bedrock') {
-      console.log('[ASC Translation] Calling Bedrock API...')
-      const bedrockEndpoint = `https://bedrock-runtime.${region}.amazonaws.com/model/${encodeURIComponent(model)}/converse`
-
-      const response = await fetch(bedrockEndpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          messages: [{ role: 'user', content: [{ text: userMsg }] }],
-          system: [{ text: sysMsg }],
-          inferenceConfig: { maxTokens: 4096 }
-        })
-      })
-
-      const result = await response.json()
-      console.log('[ASC Translation] Bedrock response:', result.message ? result.message : 'OK')
-      if (result.message) throw new Error(result.message)
-      if (!result.output?.message?.content?.[0]?.text) {
-        throw new Error(`Invalid Bedrock API response: ${JSON.stringify(result).slice(0, 200)}`)
-      }
-      content = result.output.message.content[0].text.trim()
-    } else if (provider === 'github') {
-      console.log('[ASC Translation] Calling GitHub Models...')
-      const response = await fetch('https://models.inference.ai.azure.com/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: sysMsg },
-            { role: 'user', content: userMsg }
-          ],
-          max_tokens: 4096
-        })
-      })
-
-      const result = await response.json()
-      console.log('[ASC Translation] GitHub Models response:', result.error ? result.error : 'OK')
-      if (result.error) throw new Error(result.error.message || JSON.stringify(result.error))
-      if (!result.choices?.[0]?.message?.content) {
-        throw new Error(`Invalid GitHub Models API response: ${JSON.stringify(result).slice(0, 200)}`)
-      }
-      content = result.choices[0].message.content.trim()
-    } else {
-      throw new Error(`Unknown provider: ${provider}`)
-    }
-
-    return content
+    const content = await callChatCompletion(aiConfig, sysMsg, userMsg, false)
+    return content.trim()
   }
 
   const userMessage = `Translate to ${localeName} (max ${limit} chars):\n\n${text}`

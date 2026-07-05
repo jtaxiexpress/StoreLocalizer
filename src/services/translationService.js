@@ -290,15 +290,15 @@ ${protectedList ? `Protected words (keep as-is): ${protectedList}\n\n` : ''}Resp
 }
 
 // OpenAI API
-async function callOpenAI(apiKey, model, systemMessage, userMessage, serviceTier = 'auto') {
+async function callOpenAI(apiKey, model, systemMessage, userMessage, serviceTier = 'auto', jsonMode = true) {
   const body = {
     model,
-    response_format: { type: 'json_object' },
     messages: [
       { role: 'system', content: systemMessage },
       { role: 'user', content: userMessage }
     ]
   }
+  if (jsonMode) body.response_format = { type: 'json_object' }
 
   // Add service_tier if not 'auto' (auto is the default behavior)
   if (serviceTier && serviceTier !== 'auto') {
@@ -529,40 +529,47 @@ async function callGitHubModels(apiKey, model, systemMessage, userMessage) {
   return result.choices[0].message.content
 }
 
-async function translateSingleText(text, targetLangs, config, protectedWords = []) {
+/**
+ * Provider-agnostic chat completion: dispatches to the configured AI provider
+ * and returns the raw text content. Single source of truth for the provider
+ * list — also used by the ASC / Google Play content translation flows.
+ *
+ * @param {object} config - { provider, apiKey, model, region, endpoint, serviceTier }
+ * @param {string} systemMessage
+ * @param {string} userMessage
+ * @param {boolean} jsonMode - request a JSON object response where the provider supports it
+ * @returns {Promise<string>} raw model output
+ */
+export async function callChatCompletion(config, systemMessage, userMessage, jsonMode = true) {
   const { provider, apiKey, model, region, endpoint, serviceTier } = config
+
+  switch (provider) {
+    case 'openai':
+      return callOpenAI(apiKey, model, systemMessage, userMessage, serviceTier, jsonMode)
+    case 'azure':
+      return callAzure(apiKey, model, endpoint, systemMessage, userMessage, jsonMode)
+    case 'bedrock':
+      return callBedrock(apiKey, model, region, systemMessage, userMessage)
+    case 'github':
+      return callGitHubModels(apiKey, model, systemMessage, userMessage)
+    case 'deepseek':
+      return callDeepSeek(apiKey, model, systemMessage, userMessage, jsonMode)
+    case 'cloudflare':
+      return callCloudflare(apiKey, model, endpoint, systemMessage, userMessage)
+    case 'anthropic':
+      return callAnthropic(apiKey, model, systemMessage, userMessage)
+    case 'google':
+      return callGemini(apiKey, model, systemMessage, userMessage, jsonMode)
+    default:
+      throw new Error(`Unknown provider: ${provider}`)
+  }
+}
+
+async function translateSingleText(text, targetLangs, config, protectedWords = []) {
   const { systemMessage, userMessage } = buildPrompt(text, targetLangs, protectedWords)
 
   try {
-    let content
-    switch (provider) {
-      case 'openai':
-        content = await callOpenAI(apiKey, model, systemMessage, userMessage, serviceTier)
-        break
-      case 'azure':
-        content = await callAzure(apiKey, model, endpoint, systemMessage, userMessage)
-        break
-      case 'bedrock':
-        content = await callBedrock(apiKey, model, region, systemMessage, userMessage)
-        break
-      case 'github':
-        content = await callGitHubModels(apiKey, model, systemMessage, userMessage)
-        break
-      case 'deepseek':
-        content = await callDeepSeek(apiKey, model, systemMessage, userMessage)
-        break
-      case 'cloudflare':
-        content = await callCloudflare(apiKey, model, endpoint, systemMessage, userMessage)
-        break
-      case 'anthropic':
-        content = await callAnthropic(apiKey, model, systemMessage, userMessage)
-        break
-      case 'google':
-        content = await callGemini(apiKey, model, systemMessage, userMessage)
-        break
-      default:
-        throw new Error(`Unknown provider: ${provider}`)
-    }
+    const content = await callChatCompletion(config, systemMessage, userMessage)
 
     // Parse JSON response - strip markdown code blocks if present
     let jsonContent = content.trim()
@@ -586,39 +593,10 @@ async function translateSingleText(text, targetLangs, config, protectedWords = [
 
 // Translate multiple texts in a single API call
 async function translateBatch(texts, targetLangs, config, protectedWords = []) {
-  const { provider, apiKey, model, region, endpoint, serviceTier } = config
   const { systemMessage, userMessage } = buildBatchPrompt(texts, targetLangs, protectedWords)
 
   try {
-    let content
-    switch (provider) {
-      case 'openai':
-        content = await callOpenAI(apiKey, model, systemMessage, userMessage, serviceTier)
-        break
-      case 'azure':
-        content = await callAzure(apiKey, model, endpoint, systemMessage, userMessage)
-        break
-      case 'bedrock':
-        content = await callBedrock(apiKey, model, region, systemMessage, userMessage)
-        break
-      case 'github':
-        content = await callGitHubModels(apiKey, model, systemMessage, userMessage)
-        break
-      case 'deepseek':
-        content = await callDeepSeek(apiKey, model, systemMessage, userMessage)
-        break
-      case 'cloudflare':
-        content = await callCloudflare(apiKey, model, endpoint, systemMessage, userMessage)
-        break
-      case 'anthropic':
-        content = await callAnthropic(apiKey, model, systemMessage, userMessage)
-        break
-      case 'google':
-        content = await callGemini(apiKey, model, systemMessage, userMessage)
-        break
-      default:
-        throw new Error(`Unknown provider: ${provider}`)
-    }
+    const content = await callChatCompletion(config, systemMessage, userMessage)
 
     // Parse JSON response - strip markdown code blocks if present
     let jsonContent = content.trim()
@@ -821,64 +799,10 @@ export async function testApiConnection(config) {
 
 // Simple text completion for ASO keyword generation and similar tasks
 export async function translateText(prompt, sourceLocale, targetLocale, config) {
-  const { provider, apiKey, model, region, endpoint, serviceTier } = config
-
   const systemMessage = "You are a helpful assistant. Follow the user's instructions precisely and respond with only the requested output."
 
   try {
-    let content
-    switch (provider) {
-      case 'openai': {
-        const body = {
-          model,
-          messages: [
-            { role: 'system', content: systemMessage },
-            { role: 'user', content: prompt }
-          ],
-        }
-        if (serviceTier && serviceTier !== 'auto') {
-          body.service_tier = serviceTier
-        }
-        const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${apiKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(body)
-        })
-        const openaiResult = await openaiResponse.json()
-        if (openaiResult.error) throw new Error(openaiResult.error.message)
-        if (!openaiResult.choices?.[0]?.message?.content) {
-          throw new Error(`Invalid API response: ${JSON.stringify(openaiResult).slice(0, 200)}`)
-        }
-        content = openaiResult.choices[0].message.content
-        break
-      }
-      case 'azure':
-        content = await callAzure(apiKey, model, endpoint, systemMessage, prompt, false)
-        break
-      case 'bedrock':
-        content = await callBedrock(apiKey, model, region, systemMessage, prompt)
-        break
-      case 'github':
-        content = await callGitHubModels(apiKey, model, systemMessage, prompt)
-        break
-      case 'deepseek':
-        content = await callDeepSeek(apiKey, model, systemMessage, prompt, false)
-        break
-      case 'cloudflare':
-        content = await callCloudflare(apiKey, model, endpoint, systemMessage, prompt, false)
-        break
-      case 'anthropic':
-        content = await callAnthropic(apiKey, model, systemMessage, prompt)
-        break
-      case 'google':
-        content = await callGemini(apiKey, model, systemMessage, prompt, false)
-        break
-      default:
-        throw new Error(`Unknown provider: ${provider}`)
-    }
+    const content = await callChatCompletion(config, systemMessage, prompt, false)
 
     // Clean up response
     let result = content.trim()
