@@ -5,6 +5,16 @@ import { Label } from '@/components/ui/label'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { CheckCircle2, AlertCircle, Clock, Terminal, Image } from 'lucide-react'
@@ -32,6 +42,15 @@ const VERSION_PROMPT_FIELDS = [
   { key: 'promotionalText', label: 'Promotional text' },
   { key: 'keywords', label: 'Keywords' },
 ]
+
+const COPY_FIELD_LABELS = {
+  description: 'Description',
+  keywords: 'Keywords',
+  promotionalText: 'Promotional Text',
+  whatsNew: "What's New",
+  supportUrl: 'Support URL',
+  marketingUrl: 'Marketing URL',
+}
 import HeroSection from './HeroSection'
 import ConnectionCard from './ConnectionCard'
 import AppVersionSelector from './AppVersionSelector'
@@ -104,6 +123,7 @@ export default function AppStoreConnect({ credentials, onCredentialsChange, aiCo
           appInfoLocalizations={hook.appInfoLocalizations}
           isLoadingLocalizations={hook.isLoadingLocalizations}
           localesNeedingCopy={hook.localesNeedingCopy}
+          hasPreviousVersion={hook.hasPreviousVersion}
           isCopyingFromPrevious={hook.isCopyingFromPrevious}
           handleCopyFromPreviousVersion={hook.handleCopyFromPreviousVersion}
           handleEditLocalization={hook.handleEditLocalization}
@@ -274,6 +294,28 @@ export default function AppStoreConnect({ credentials, onCredentialsChange, aiCo
           </ScrollArea>
         </CardContent>
       </Card>
+
+      <AlertDialog
+        open={hook.copyConfirm.open}
+        onOpenChange={(open) => !open && hook.setCopyConfirm({ open: false, locales: 0, fields: [] })}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Overwrite existing content?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {hook.copyConfirm.locales} locale(s) already have text that will be replaced by the previous
+              version's content: {hook.copyConfirm.fields.map(f => COPY_FIELD_LABELS[f] || f).join(', ')}.
+              This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={hook.confirmCopyFromPreviousVersion}>
+              Overwrite and copy all
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={hook.editDialog.open} onOpenChange={(open) => !open && hook.setEditDialog({ ...hook.editDialog, open: false })}>
         <DialogContent className="sm:max-w-[700px] max-h-[90vh] overflow-y-auto">

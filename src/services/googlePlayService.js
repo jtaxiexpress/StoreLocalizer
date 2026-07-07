@@ -183,6 +183,8 @@ async function apiRequest(endpoint, token, options = {}) {
   const url = endpoint.startsWith('http') ? endpoint : `${BASE_URL}${endpoint}`
 
   const response = await fetch(url, {
+    // Store data must always be fresh — bypass the browser HTTP cache
+    cache: 'no-store',
     ...options,
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -514,15 +516,19 @@ export async function translateGooglePlayContent(text, targetLocale, aiConfig, f
 export async function translateAllFields(sourceListing, targetLocale, aiConfig, fieldsToTranslate, onProgress) {
   const results = {}
   const errors = []
+  const skipped = []
   const total = fieldsToTranslate.length
   let current = 0
 
   for (const field of fieldsToTranslate) {
     current++
     const sourceText = sourceListing[field]
-    
-    if (!sourceText) {
-      results[field] = ''
+
+    if (!sourceText || sourceText.trim() === '') {
+      // Omit empty source fields instead of returning '' — writing '' back
+      // would silently clear the target locale while reporting success.
+      skipped.push(field)
+      onProgress?.({ field, current, total, status: 'skipped' })
       continue
     }
 
@@ -547,7 +553,7 @@ export async function translateAllFields(sourceListing, targetLocale, aiConfig, 
     await new Promise(resolve => setTimeout(resolve, 200))
   }
 
-  return { results, errors }
+  return { results, errors, skipped }
 }
 
 // Normalize locale code to Google Play format

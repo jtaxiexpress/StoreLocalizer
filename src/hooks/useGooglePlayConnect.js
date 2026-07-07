@@ -273,6 +273,24 @@ export default function useGooglePlayConnect({ credentials, onCredentialsChange,
       return
     }
 
+    const emptySourceFields = fieldsToTranslate.filter(f => !sourceListing[f] || sourceListing[f].trim() === '')
+    const fieldsWithContent = fieldsToTranslate.filter(f => !emptySourceFields.includes(f))
+
+    if (fieldsWithContent.length === 0) {
+      addLog(`Nothing to translate: ${emptySourceFields.join(', ')} is empty in the source language (${sourceLocale})`, 'error')
+      setTranslationAlert({
+        show: true,
+        success: false,
+        message: `Nothing to translate — ${emptySourceFields.join(', ')} is empty in ${sourceLocale}. Add the source text first, then translate.`,
+        errorCount: 0,
+      })
+      return
+    }
+
+    if (emptySourceFields.length > 0) {
+      addLog(`Skipping field(s) with no source text in ${sourceLocale}: ${emptySourceFields.join(', ')}`, 'info')
+    }
+
     setIsTranslating(true)
     setTranslationAlert({ show: false, success: true, message: '', errorCount: 0 })
 
@@ -304,7 +322,7 @@ export default function useGooglePlayConnect({ credentials, onCredentialsChange,
           sourceListing,
           targetLocale,
           config,
-          fieldsToTranslate,
+          fieldsWithContent,
           (progress) => {
             setTranslationProgress(prev => ({
               ...prev,

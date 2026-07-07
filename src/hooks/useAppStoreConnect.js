@@ -28,6 +28,9 @@ import { decrypt } from '@/utils/crypto'
 
 const ENCRYPTED_KEY_STORAGE = 'asc-encrypted-p8-key'
 
+// Version-localization fields that can be carried over from the previous version
+const COPYABLE_VERSION_FIELDS = ['description', 'keywords', 'promotionalText', 'whatsNew', 'supportUrl', 'marketingUrl']
+
 export default function useAppStoreConnect({ credentials, onCredentialsChange, aiConfig, astroConfig, appCompeteConfig, translationPrompts }) {
   const [isConnecting, setIsConnecting] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState(null)
@@ -113,6 +116,7 @@ export default function useAppStoreConnect({ credentials, onCredentialsChange, a
 
   const [previousVersionLocalizations, setPreviousVersionLocalizations] = useState([])
   const [isCopyingFromPrevious, setIsCopyingFromPrevious] = useState(false)
+  const [copyConfirm, setCopyConfirm] = useState({ open: false, locales: 0, fields: [] })
 
   const [editedAppInfo, setEditedAppInfo] = useState({})
   const [isSavingAppInfo, setIsSavingAppInfo] = useState(false)
@@ -121,7 +125,9 @@ export default function useAppStoreConnect({ credentials, onCredentialsChange, a
 
   const [sourceLocale, setSourceLocale] = useState('en-US')
   const [targetLocales, setTargetLocales] = useState([])
-  const [fieldsToTranslate, setFieldsToTranslate] = useState(['description', 'whatsNew', 'promotionalText', 'keywords'])
+  // Only What's New by default — translating description/keywords by accident
+  // can overwrite curated store metadata in every target language.
+  const [fieldsToTranslate, setFieldsToTranslate] = useState(['whatsNew'])
   const [isTranslating, setIsTranslating] = useState(false)
   const [translationProgress, setTranslationProgress] = useState({ current: 0, total: 0, status: '' })
 
@@ -345,46 +351,100 @@ export default function useAppStoreConnect({ credentials, onCredentialsChange, a
     setIsLoadingLocalizations(false)
   }
 
-  const handleCopyFromPreviousVersion = async () => {
+  // Copy everything (description, keywords, promo text, What's New, URLs) from
+  // the previous version, overwriting current content. If existing text would be
+  // replaced, a confirmation dialog is shown first (see copyConfirm state).
+  const computeCopyOverwrites = () => {
+    const fields = new Set()
+    let locales = 0
+    for (const prevLoc of previousVersionLocalizations) {
+      const currentLoc = versionLocalizations.find(c => c.locale === prevLoc.locale)
+      if (!currentLoc) continue
+      let localeHasOverwrite = false
+      for (const field of COPYABLE_VERSION_FIELDS) {
+        const prevFilled = prevLoc[field] && prevLoc[field].trim() !== ''
+        const currentFilled = currentLoc[field] && currentLoc[field].trim() !== ''
+        if (prevFilled && currentFilled && prevLoc[field] !== currentLoc[field]) {
+          fields.add(field)
+          localeHasOverwrite = true
+        }
+      }
+      if (localeHasOverwrite) locales++
+    }
+    return { locales, fields: [...fields] }
+  }
+
+  const handleCopyFromPreviousVersion = () => {
     if (previousVersionLocalizations.length === 0) {
       addLog('No previous version localizations available', 'error')
       return
     }
 
+    const { locales, fields } = computeCopyOverwrites()
+    if (locales > 0) {
+      setCopyConfirm({ open: true, locales, fields })
+      return
+    }
+    performCopyFromPreviousVersion()
+  }
+
+  const confirmCopyFromPreviousVersion = () => {
+    setCopyConfirm({ open: false, locales: 0, fields: [] })
+    performCopyFromPreviousVersion()
+  }
+
+  const performCopyFromPreviousVersion = async () => {
     setIsCopyingFromPrevious(true)
     try {
-      let copiedCount = 0
+      let updatedCount = 0
+      let createdCount = 0
       let errorCount = 0
 
-      for (const currentLoc of versionLocalizations) {
-        const prevLoc = previousVersionLocalizations.find(p => p.locale === currentLoc.locale)
-        if (!prevLoc) continue
+      for (const prevLoc of previousVersionLocalizations) {
+        const currentLoc = versionLocalizations.find(c => c.locale === prevLoc.locale)
 
-        const needsWhatsNew = !currentLoc.whatsNew && prevLoc.whatsNew
-        const needsPromoText = !currentLoc.promotionalText && prevLoc.promotionalText
+        try {
+          if (!currentLoc) {
+            const content = {}
+            for (const field of COPYABLE_VERSION_FIELDS) {
+              if (prevLoc[field] && prevLoc[field].trim() !== '') content[field] = prevLoc[field]
+            }
+            if (Object.keys(content).length === 0) continue
 
-        if (needsWhatsNew || needsPromoText) {
-          const updateData = {}
-          if (needsWhatsNew) updateData.whatsNew = prevLoc.whatsNew
-          if (needsPromoText) updateData.promotionalText = prevLoc.promotionalText
+            await createVersionLocalization(credentials, selectedVersion.id, prevLoc.locale, content)
+            createdCount++
+            addLog(`Created ${prevLoc.locale} with: ${Object.keys(content).join(', ')}`, 'success')
+          } else {
+            const updates = {}
+            for (const field of COPYABLE_VERSION_FIELDS) {
+              const prevFilled = prevLoc[field] && prevLoc[field].trim() !== ''
+              // Overwrite with the previous version's text; skip identical values
+              // to avoid useless API calls. Fields empty in the previous version
+              // are left untouched (copying can't blank anything).
+              if (prevFilled && prevLoc[field] !== currentLoc[field]) updates[field] = prevLoc[field]
+            }
+            if (Object.keys(updates).length === 0) continue
 
-          try {
-            await updateVersionLocalization(credentials, currentLoc.id, updateData)
-            copiedCount++
-            addLog(`Copied to ${currentLoc.locale}: ${needsWhatsNew ? 'What\'s New' : ''}${needsWhatsNew && needsPromoText ? ' & ' : ''}${needsPromoText ? 'Promo Text' : ''}`, 'success')
-          } catch (error) {
-            errorCount++
-            addLog(`Failed to copy to ${currentLoc.locale}: ${error.message}`, 'error')
+            await updateVersionLocalization(credentials, currentLoc.id, updates)
+            updatedCount++
+            addLog(`Copied to ${prevLoc.locale}: ${Object.keys(updates).join(', ')}`, 'success')
           }
+        } catch (error) {
+          errorCount++
+          addLog(`Failed to copy to ${prevLoc.locale}: ${error.message}`, 'error')
         }
       }
 
-      if (copiedCount > 0) {
+      if (updatedCount > 0 || createdCount > 0) {
         const versionLocs = await getVersionLocalizations(credentials, selectedVersion.id)
         setVersionLocalizations(versionLocs)
       }
 
-      addLog(`Copied content to ${copiedCount} locale(s)${errorCount > 0 ? `, ${errorCount} error(s)` : ''}`, copiedCount > 0 ? 'success' : 'error')
+      const parts = []
+      if (updatedCount > 0) parts.push(`${updatedCount} locale(s) updated`)
+      if (createdCount > 0) parts.push(`${createdCount} locale(s) created`)
+      if (parts.length === 0) parts.push('nothing to copy — all fields already filled')
+      addLog(`Copy from previous version: ${parts.join(', ')}${errorCount > 0 ? `, ${errorCount} error(s)` : ''}`, errorCount > 0 ? 'error' : 'success')
     } catch (error) {
       addLog(`Error copying from previous version: ${error.message}`, 'error')
     } finally {
@@ -395,7 +455,9 @@ export default function useAppStoreConnect({ credentials, onCredentialsChange, a
   const localesNeedingCopy = versionLocalizations.filter(loc => {
     const prevLoc = previousVersionLocalizations.find(p => p.locale === loc.locale)
     if (!prevLoc) return false
-    return (!loc.whatsNew && prevLoc.whatsNew) || (!loc.promotionalText && prevLoc.promotionalText)
+    return COPYABLE_VERSION_FIELDS.some(field =>
+      (!loc[field] || loc[field].trim() === '') && prevLoc[field] && prevLoc[field].trim() !== ''
+    )
   })
 
   const cleanAndTruncateKeywords = (raw) => {
@@ -1044,14 +1106,55 @@ Respond with ONLY the keywords, nothing else:`
       return
     }
 
-    const sourceLoc = versionLocalizations.find(l => l.locale === sourceLocale)
+    setIsTranslating(true)
+    setTranslationAlert({ show: false, success: true, message: '', errorCount: 0 })
+
+    // Re-fetch localizations so the source text reflects what is in App Store
+    // Connect right now (e.g. a What's New typed on the ASC website after this
+    // page loaded would otherwise be missed and every field translated as '').
+    let currentLocalizations = versionLocalizations
+    try {
+      currentLocalizations = await getVersionLocalizations(credentials, selectedVersion.id)
+      setVersionLocalizations(currentLocalizations)
+    } catch (error) {
+      addLog(`Could not refresh localizations, using loaded data: ${error.message}`, 'info')
+    }
+
+    const sourceLoc = currentLocalizations.find(l => l.locale === sourceLocale)
     if (!sourceLoc) {
       addLog(`No source localization found for ${sourceLocale}`, 'error')
+      setIsTranslating(false)
       return
     }
 
-    setIsTranslating(true)
-    setTranslationAlert({ show: false, success: true, message: '', errorCount: 0 })
+    const fieldLabel = (key) => TRANSLATABLE_FIELDS.find(f => f.key === key)?.label || key
+    const emptySourceFields = fieldsToTranslate.filter(f => !sourceLoc[f] || sourceLoc[f].trim() === '')
+    const fieldsWithContent = fieldsToTranslate.filter(f => !emptySourceFields.includes(f))
+
+    if (fieldsWithContent.length === 0) {
+      const labels = emptySourceFields.map(fieldLabel).join(', ')
+      addLog(`Nothing to translate: ${labels} is empty in the source language (${sourceLocale})`, 'error')
+      setTranslationAlert({
+        show: true,
+        success: false,
+        message: `Nothing to translate — ${labels} is empty in ${sourceLocale}. Add the source text first (Edit button in Current Localizations), then translate.`,
+        errorCount: 0,
+      })
+      setIsTranslating(false)
+      return
+    }
+
+    if (emptySourceFields.length > 0) {
+      addLog(`Skipping field(s) with no source text in ${sourceLocale}: ${emptySourceFields.map(fieldLabel).join(', ')}`, 'info')
+    }
+
+    // Show exactly which source text was fetched, so a stale/wrong source is
+    // immediately visible in the log instead of silently mistranslating.
+    for (const f of fieldsWithContent) {
+      const text = sourceLoc[f]
+      addLog(`Source ${sourceLocale} ${fieldLabel(f)}: "${text.substring(0, 80)}${text.length > 80 ? '…' : ''}"`, 'info')
+    }
+
     const totalLocales = targetLocales.length
     let currentLocale = 0
     let totalErrors = 0
@@ -1080,7 +1183,7 @@ Respond with ONLY the keywords, nothing else:`
           sourceLoc,
           targetLocale,
           config,
-          fieldsToTranslate,
+          fieldsWithContent,
           (progress) => {
             setTranslationProgress(prev => ({
               ...prev,
@@ -1098,7 +1201,7 @@ Respond with ONLY the keywords, nothing else:`
           totalErrors += translationErrors.length
         }
 
-        const existingLoc = versionLocalizations.find(l => l.locale === targetLocale)
+        const existingLoc = currentLocalizations.find(l => l.locale === targetLocale)
 
         if (existingLoc) {
           await updateVersionLocalization(credentials, existingLoc.id, translatedFields)
@@ -1613,7 +1716,11 @@ ${sourceLoc.subtitle ? `Subtitle: ${sourceLoc.subtitle}` : ''}`
     handleAppSelect,
     handleVersionSelect,
     handleCopyFromPreviousVersion,
+    confirmCopyFromPreviousVersion,
+    copyConfirm,
+    setCopyConfirm,
     localesNeedingCopy,
+    hasPreviousVersion: previousVersionLocalizations.length > 0,
     handleGenerateASOKeywords,
     toggleAsoLocale,
     startEditingKeywords,

@@ -13,6 +13,7 @@ export default function LocalizationsCard({
   appInfoLocalizations,
   isLoadingLocalizations,
   localesNeedingCopy,
+  hasPreviousVersion,
   isCopyingFromPrevious,
   handleCopyFromPreviousVersion,
   handleEditLocalization,
@@ -50,13 +51,14 @@ export default function LocalizationsCard({
               </CardDescription>
             </div>
           </div>
-          {localesNeedingCopy.length > 0 && (
+          {hasPreviousVersion && (
             <Button
               onClick={handleCopyFromPreviousVersion}
               disabled={isCopyingFromPrevious}
               variant="outline"
               size="sm"
               className="h-9"
+              title="Copy description, keywords, promo text, What's New and URLs from the previous version into every locale. Asks for confirmation before overwriting existing text."
             >
               {isCopyingFromPrevious ? (
                 <>
@@ -66,7 +68,7 @@ export default function LocalizationsCard({
               ) : (
                 <>
                   <Copy className="h-4 w-4 mr-2" />
-                  Copy from Previous ({localesNeedingCopy.length})
+                  Copy All from Previous{localesNeedingCopy.length > 0 ? ` (${localesNeedingCopy.length})` : ''}
                 </>
               )}
             </Button>
@@ -92,10 +94,10 @@ export default function LocalizationsCard({
                 <Copy className="h-5 w-5 text-amber-500 shrink-0" />
                 <div className="flex-1">
                   <p className="text-sm font-medium text-amber-500">
-                    {localesNeedingCopy.length} locale(s) have empty What's New or Promo Text
+                    {localesNeedingCopy.length} locale(s) have empty fields (description, keywords, What's New…)
                   </p>
                   <p className="text-xs text-amber-500/70 mt-0.5">
-                    Content available from previous version can be copied
+                    Content from the previous version can fill them — use "Copy All from Previous"
                   </p>
                 </div>
               </div>

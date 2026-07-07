@@ -11,7 +11,9 @@ const APPCOMPETE_API_BASE = 'https://appcompete.com/api'
 // Allowed origins
 const ALLOWED_ORIGINS = [
   'https://localizer.fayhe.com',
-  'https://xcstrings-localizer.pages.dev'
+  'https://xcstrings-localizer.pages.dev',
+  'https://storelocalizer.com',
+  'https://www.storelocalizer.com'
 ]
 
 export default {
@@ -113,6 +115,9 @@ export default {
         headers: {
           'Content-Type': response.headers.get('Content-Type') || 'application/json',
           'Access-Control-Allow-Origin': corsOrigin,
+          // API data must always be fresh — never let the browser or any
+          // intermediary cache proxied store data
+          'Cache-Control': 'no-store',
         },
       })
     } catch (error) {

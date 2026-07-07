@@ -165,6 +165,8 @@ export async function apiRequest(endpoint, token, options = {}) {
   const url = endpoint.startsWith('http') ? endpoint : `${BASE_URL}${endpoint}`
 
   const response = await fetch(url, {
+    // Store data must always be fresh — bypass the browser HTTP cache
+    cache: 'no-store',
     ...options,
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -1049,6 +1051,7 @@ export async function getAllScreenshotsForVersion(credentials, versionLocalizati
 export async function translateAllFields(sourceLocalization, targetLocale, aiConfig, fieldsToTranslate, onProgress, customPrompts = null) {
   const results = {}
   const errors = []
+  const skipped = []
   const total = fieldsToTranslate.length
   let current = 0
 
@@ -1068,8 +1071,11 @@ export async function translateAllFields(sourceLocalization, targetLocale, aiCon
     const sourceText = sourceLocalization[field]
 
     if (!sourceText || sourceText.trim() === '') {
-      results[field] = ''
+      // Omit empty source fields instead of returning '' — writing '' back
+      // would silently clear the target locale while reporting success.
+      skipped.push(field)
       current++
+      onProgress?.({ current, total, field, status: 'skipped' })
       continue
     }
 
@@ -1145,5 +1151,5 @@ export async function translateAllFields(sourceLocalization, targetLocale, aiCon
     }
   }
 
-  return { results, errors }
+  return { results, errors, skipped }
 }
