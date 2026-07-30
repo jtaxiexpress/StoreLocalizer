@@ -40,15 +40,15 @@ export const SUPPORTED_LANGUAGES = [
 export const PROVIDERS = {
   openai: {
     name: 'OpenAI',
-    models: ['gpt-5.4-nano', 'gpt-5.4-mini', 'gpt-5.5'],
-    defaultModel: 'gpt-5.4-nano',
+    models: ['gpt-5.4-nano', 'gpt-5.4-mini', 'gpt-5.6-luna'],
+    defaultModel: 'gpt-5.6-luna',
     serviceTiers: ['auto', 'default', 'flex', 'priority'],
     defaultServiceTier: 'auto',
   },
   azure: {
     name: 'Azure OpenAI',
-    models: ['gpt-5-nano', 'gpt-5-mini'],
-    defaultModel: 'gpt-5-nano',
+    models: ['gpt-5-nano', 'gpt-5-mini', 'gpt-5.6-luna'],
+    defaultModel: 'gpt-5.6-luna',
     needsEndpoint: true,
     customModelInput: true,
     placeholder: 'https://xxx.openai.azure.com',
@@ -65,8 +65,8 @@ export const PROVIDERS = {
   },
   github: {
     name: 'GitHub Models',
-    models: ['gpt-4o', 'gpt-4.1'],
-    defaultModel: 'gpt-4o',
+    models: ['gpt-4o', 'gpt-5.6-luna'],
+    defaultModel: 'gpt-5.6-luna',
   },
   anthropic: {
     name: 'Anthropic (Claude)',
@@ -75,8 +75,8 @@ export const PROVIDERS = {
   },
   google: {
     name: 'Google (Gemini)',
-    models: ['gemini-3.1-flash-lite', 'gemini-3.5-flash', 'gemini-3.1-pro-preview'],
-    defaultModel: 'gemini-3.5-flash',
+    models: ['gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.1-pro'],
+    defaultModel: 'gemini-3.5-flash-lite',
   },
   deepseek: {
     name: 'DeepSeek',
