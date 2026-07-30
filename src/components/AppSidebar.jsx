@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { toast } from 'sonner'
-import { FileText, Globe, ChevronDown, Key, Cpu, Trash2, ExternalLink, Lock, Unlock, Save, Languages, Store, Sparkles, CheckCircle2, AlertCircle, Link2, AppWindow, Layers, TrendingUp, Terminal, Image, Moon, Sun, Monitor, DollarSign, Play, Loader2, Search } from 'lucide-react'
+import { FileText, Globe, ChevronDown, Key, Cpu, Trash2, ExternalLink, Lock, Unlock, Save, Languages, Store, Sparkles, CheckCircle2, AlertCircle, Link2, AppWindow, Layers, TrendingUp, Terminal, Image, Moon, Sun, Monitor, DollarSign, Play, Loader2, Search, Bot } from 'lucide-react'
 import { useTheme } from './ThemeProvider'
 import {
   Sidebar,
@@ -71,6 +71,7 @@ const NAV_ITEMS = [
   { id: 'googleplay', label: 'Google Play', icon: Play, tooltip: 'Google Play Console' },
   { id: 'screenshots', label: 'Screenshots', icon: Image, tooltip: 'Screenshot Maker' },
   { id: 'subscriptions', label: 'Subscriptions', icon: DollarSign, tooltip: 'Subscription Pricing & Translations' },
+  { id: 'agent', label: 'Agent', icon: Bot, tooltip: 'AI Agent — chat with function calling' },
 ]
 import { encrypt, decrypt } from '@/utils/crypto'
 import { isLocalEnvironment } from '@/constants'

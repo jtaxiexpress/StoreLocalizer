@@ -11,3 +11,6 @@ createRoot(document.getElementById('root')).render(
     </ThemeProvider>
   </StrictMode>,
 )
+
+// App booted successfully — allow the boot-recovery reload in index.html to trigger again on future failures
+sessionStorage.removeItem('sl-boot-retry')

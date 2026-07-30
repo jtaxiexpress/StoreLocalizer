@@ -40,7 +40,7 @@ export const SUPPORTED_LANGUAGES = [
 export const PROVIDERS = {
   openai: {
     name: 'OpenAI',
-    models: ['gpt-5.4-nano', 'gpt-5.4-mini', 'gpt-5.6-luna'],
+    models: ['gpt-5.6-luna'],
     defaultModel: 'gpt-5.6-luna',
     serviceTiers: ['auto', 'default', 'flex', 'priority'],
     defaultServiceTier: 'auto',

@@ -1,19 +1,32 @@
-import { useCallback } from 'react'
+import { useCallback, useState, lazy, Suspense } from 'react'
 import { Toaster } from 'sonner'
-import WelcomeScreen from './components/WelcomeScreen'
+import { Loader2 } from 'lucide-react'
 import { SidebarProvider, SidebarTrigger, SidebarInset } from '@/components/ui/sidebar'
 import { AppSidebar } from './components/AppSidebar'
-import AppStoreConnect from './components/appstore'
-import GooglePlayConnect from './components/googleplay'
-import ScreenshotMaker from './components/ScreenshotMaker'
-import SubscriptionManager from './components/SubscriptionManager'
-import { XCStringsPage } from './components/XCStringsPage'
 import { ThemeToggle } from './components/ThemeToggle'
 import DemoShowcase from './components/DemoShowcase'
 import { useAppState } from './hooks/useAppState'
 import { useTranslation } from './hooks/useTranslation'
 import { useTranslationEditor } from './hooks/useTranslationEditor'
 import { useScreenshotData } from './hooks/useScreenshotData'
+
+const WelcomeScreen = lazy(() => import('./components/WelcomeScreen'))
+const AppStoreConnect = lazy(() => import('./components/appstore'))
+const GooglePlayConnect = lazy(() => import('./components/googleplay'))
+const ScreenshotMaker = lazy(() => import('./components/ScreenshotMaker'))
+const SubscriptionManager = lazy(() => import('./components/SubscriptionManager'))
+const AgentPage = lazy(() => import('./components/agent'))
+const XCStringsPage = lazy(() =>
+  import('./components/XCStringsPage').then((m) => ({ default: m.XCStringsPage }))
+)
+
+function PageLoader() {
+  return (
+    <div className="flex min-h-[50vh] items-center justify-center">
+      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+    </div>
+  )
+}
 
 function App() {
   const translation = useTranslation()
@@ -37,8 +50,18 @@ function App() {
     translation.handleTranslate(appState.providerConfig, appState.currentApiKey, appState.currentModel)
   }, [translation.handleTranslate, appState.providerConfig, appState.currentApiKey, appState.currentModel])
 
+  // Mount ScreenshotMaker lazily on first visit (it pulls in three.js), keep it mounted afterwards
+  const [screenshotsVisited, setScreenshotsVisited] = useState(appState.activePage === 'screenshots')
+  if (appState.activePage === 'screenshots' && !screenshotsVisited) {
+    setScreenshotsVisited(true)
+  }
+
   if (appState.showWelcome) {
-    return <WelcomeScreen onComplete={appState.handleWelcomeComplete} />
+    return (
+      <Suspense fallback={<div className="min-h-svh bg-background" />}>
+        <WelcomeScreen onComplete={appState.handleWelcomeComplete} />
+      </Suspense>
+    )
   }
 
   return (
@@ -70,94 +93,126 @@ function App() {
           </header>
 
           <main className={`flex-1 min-h-0 ${appState.activePage === 'screenshots' ? '' : 'p-6 md:p-8 lg:p-10'}`}>
-            <div className={`mx-auto ${appState.activePage === 'screenshots' ? 'w-full max-w-none h-full' : 'max-w-6xl space-y-8'}`}>
+            <div className={`mx-auto ${
+              appState.activePage === 'screenshots'
+                ? 'w-full max-w-none h-full'
+                : appState.activePage === 'agent'
+                  ? 'w-full max-w-none space-y-8'
+                  : 'max-w-6xl space-y-8'
+            }`}>
               {appState.activePage === 'appstore' && (
-                <AppStoreConnect
-                  credentials={appState.ascCredentials}
-                  onCredentialsChange={appState.setAscCredentials}
-                  aiConfig={appState.providerConfig}
-                  astroConfig={appState.astroConfig}
-                  appCompeteConfig={appState.appCompeteConfig}
-                />
+                <Suspense fallback={<PageLoader />}>
+                  <AppStoreConnect
+                    credentials={appState.ascCredentials}
+                    onCredentialsChange={appState.setAscCredentials}
+                    aiConfig={appState.providerConfig}
+                    astroConfig={appState.astroConfig}
+                    appCompeteConfig={appState.appCompeteConfig}
+                  />
+                </Suspense>
               )}
 
               {appState.activePage === 'googleplay' && (
-                <GooglePlayConnect
-                  credentials={appState.gpCredentials}
-                  onCredentialsChange={appState.setGpCredentials}
-                  aiConfig={appState.providerConfig}
-                />
+                <Suspense fallback={<PageLoader />}>
+                  <GooglePlayConnect
+                    credentials={appState.gpCredentials}
+                    onCredentialsChange={appState.setGpCredentials}
+                    aiConfig={appState.providerConfig}
+                  />
+                </Suspense>
               )}
 
-              <div className={appState.activePage === 'screenshots' ? 'h-full' : 'hidden'}>
-                <ScreenshotMaker
-                  localizationPayload={screenshot.screenshotLocalizationPayload}
-                  aiConfig={appState.providerConfig}
-                  active={appState.activePage === 'screenshots'}
-                />
-              </div>
+              {screenshotsVisited && (
+                <div className={appState.activePage === 'screenshots' ? 'h-full' : 'hidden'}>
+                  <Suspense fallback={<PageLoader />}>
+                    <ScreenshotMaker
+                      localizationPayload={screenshot.screenshotLocalizationPayload}
+                      aiConfig={appState.providerConfig}
+                      active={appState.activePage === 'screenshots'}
+                    />
+                  </Suspense>
+                </div>
+              )}
 
               {appState.activePage === 'subscriptions' && (
-                <SubscriptionManager
-                  aiConfig={appState.providerConfig}
-                  ascCredentials={appState.ascCredentials}
-                  onCredentialsChange={appState.setAscCredentials}
-                />
+                <Suspense fallback={<PageLoader />}>
+                  <SubscriptionManager
+                    aiConfig={appState.providerConfig}
+                    ascCredentials={appState.ascCredentials}
+                    onCredentialsChange={appState.setAscCredentials}
+                  />
+                </Suspense>
+              )}
+
+              {appState.activePage === 'agent' && (
+                <Suspense fallback={<PageLoader />}>
+                  <AgentPage
+                    aiConfig={appState.providerConfig}
+                    ascCredentials={appState.ascCredentials}
+                    onAscCredentialsChange={appState.setAscCredentials}
+                    gpCredentials={appState.gpCredentials}
+                    appCompeteConfig={appState.appCompeteConfig}
+                    xcstringsData={translation.xcstringsData}
+                    fileName={translation.fileName}
+                  />
+                </Suspense>
               )}
 
               {appState.activePage === 'xcstrings' && (
-                <XCStringsPage
-                  providerConfig={appState.providerConfig}
-                  currentApiKey={appState.currentApiKey}
-                  currentModel={appState.currentModel}
-                  isTesting={appState.isTesting}
-                  testResult={appState.testResult}
-                  handleTestConnection={appState.handleTestConnection}
-                  concurrency={translation.concurrency}
-                  setConcurrency={translation.setConcurrency}
-                  batchSize={translation.batchSize}
-                  setBatchSize={translation.setBatchSize}
-                  protectedWords={translation.protectedWords}
-                  newProtectedWord={translation.newProtectedWord}
-                  setNewProtectedWord={translation.setNewProtectedWord}
-                  addProtectedWord={translation.addProtectedWord}
-                  removeProtectedWord={translation.removeProtectedWord}
-                  xcstringsData={translation.xcstringsData}
-                  fileName={translation.fileName}
-                  stats={translation.stats}
-                  selectedLanguages={translation.selectedLanguages}
-                  isTranslating={translation.isTranslating}
-                  progress={translation.progress}
-                  progressPercent={translation.progressPercent}
-                  logs={translation.logs}
-                  isDragging={translation.isDragging}
-                  languageSearch={translation.languageSearch}
-                  setLanguageSearch={translation.setLanguageSearch}
-                  handleFileUpload={translation.handleFileUpload}
-                  handleDragOver={translation.handleDragOver}
-                  handleDragLeave={translation.handleDragLeave}
-                  handleDrop={translation.handleDrop}
-                  handleLanguageToggle={translation.handleLanguageToggle}
-                  handleSelectAll={translation.handleSelectAll}
-                  handleTranslate={handleTranslate}
-                  handleSave={translation.handleSave}
-                  editDialog={editor.editDialog}
-                  setEditDialog={editor.setEditDialog}
-                  filterLang={editor.filterLang}
-                  setFilterLang={editor.setFilterLang}
-                  searchQuery={editor.searchQuery}
-                  setSearchQuery={editor.setSearchQuery}
-                  currentPage={editor.currentPage}
-                  setCurrentPage={editor.setCurrentPage}
-                  availableLanguages={editor.availableLanguages}
-                  filteredTranslations={editor.filteredTranslations}
-                  paginatedTranslations={editor.paginatedTranslations}
-                  totalPages={editor.totalPages}
-                  truncateText={editor.truncateText}
-                  handleEditTranslation={editor.handleEditTranslation}
-                  handleSaveEdit={editor.handleSaveEdit}
-                  ITEMS_PER_PAGE={editor.ITEMS_PER_PAGE}
-                />
+                <Suspense fallback={<PageLoader />}>
+                  <XCStringsPage
+                    providerConfig={appState.providerConfig}
+                    currentApiKey={appState.currentApiKey}
+                    currentModel={appState.currentModel}
+                    isTesting={appState.isTesting}
+                    testResult={appState.testResult}
+                    handleTestConnection={appState.handleTestConnection}
+                    concurrency={translation.concurrency}
+                    setConcurrency={translation.setConcurrency}
+                    batchSize={translation.batchSize}
+                    setBatchSize={translation.setBatchSize}
+                    protectedWords={translation.protectedWords}
+                    newProtectedWord={translation.newProtectedWord}
+                    setNewProtectedWord={translation.setNewProtectedWord}
+                    addProtectedWord={translation.addProtectedWord}
+                    removeProtectedWord={translation.removeProtectedWord}
+                    xcstringsData={translation.xcstringsData}
+                    fileName={translation.fileName}
+                    stats={translation.stats}
+                    selectedLanguages={translation.selectedLanguages}
+                    isTranslating={translation.isTranslating}
+                    progress={translation.progress}
+                    progressPercent={translation.progressPercent}
+                    logs={translation.logs}
+                    isDragging={translation.isDragging}
+                    languageSearch={translation.languageSearch}
+                    setLanguageSearch={translation.setLanguageSearch}
+                    handleFileUpload={translation.handleFileUpload}
+                    handleDragOver={translation.handleDragOver}
+                    handleDragLeave={translation.handleDragLeave}
+                    handleDrop={translation.handleDrop}
+                    handleLanguageToggle={translation.handleLanguageToggle}
+                    handleSelectAll={translation.handleSelectAll}
+                    handleTranslate={handleTranslate}
+                    handleSave={translation.handleSave}
+                    editDialog={editor.editDialog}
+                    setEditDialog={editor.setEditDialog}
+                    filterLang={editor.filterLang}
+                    setFilterLang={editor.setFilterLang}
+                    searchQuery={editor.searchQuery}
+                    setSearchQuery={editor.setSearchQuery}
+                    currentPage={editor.currentPage}
+                    setCurrentPage={editor.setCurrentPage}
+                    availableLanguages={editor.availableLanguages}
+                    filteredTranslations={editor.filteredTranslations}
+                    paginatedTranslations={editor.paginatedTranslations}
+                    totalPages={editor.totalPages}
+                    truncateText={editor.truncateText}
+                    handleEditTranslation={editor.handleEditTranslation}
+                    handleSaveEdit={editor.handleSaveEdit}
+                    ITEMS_PER_PAGE={editor.ITEMS_PER_PAGE}
+                  />
+                </Suspense>
               )}
             </div>
           </main>

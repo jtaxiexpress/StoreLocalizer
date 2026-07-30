@@ -12,7 +12,7 @@
 [![Follow on X](https://img.shields.io/badge/Follow-@fayhecode-black?style=flat&logo=x)](https://x.com/fayhecode)
 
 *One tool for the whole store pipeline: `.xcstrings` translation · App Store Connect & Google Play sync ·
-ASO keywords · device screenshots · GDP-fair subscription pricing.*
+ASO keywords · device screenshots · GDP-fair subscription pricing — plus an AI agent that drives it all by chat.*
 
 <img src="docs/screenshots/xcstrings-editor.png" width="900" alt="StoreLocalizer — translations editor" />
 
@@ -36,6 +36,12 @@ Everything talks **directly** to App Store Connect and Google Play Console — n
 ---
 
 ## ✨ The toolkit
+
+### 🤖 The Agent — run the whole pipeline by chat
+
+Tell it what you want in plain words and it calls **24 functions** against your real accounts: list apps and versions, audit localizations, translate and push "What's New" to five locales, mine ASO keywords from AppCompete, or find what's missing in your `.xcstrings`. It can even **see your App Store screenshots** — ask for feedback and it reviews each one, with an in-chat gallery to switch locales and a lightbox to zoom in.
+
+<div align="center"><img src="docs/screenshots/agent.png" width="860" alt="AI agent reviewing App Store screenshots in chat" /></div>
 
 ### 🔤 XCStrings Translator
 
@@ -87,7 +93,7 @@ Pick a provider in the sidebar, paste a key, done — keys never leave your brow
 
 | Provider | Models | Notes |
 |---|---|---|
-| **OpenAI** | gpt-5.4-nano · gpt-5.4-mini · gpt-5.5 | model list fetched live from your account |
+| **OpenAI** | gpt-5.6-luna | model list fetched live from your account |
 | **Anthropic (Claude)** | haiku-4.5 · sonnet-4.6 · opus-4.8 | direct browser access |
 | **Google (Gemini)** | 3.1-flash-lite · 3.5-flash · 3.1-pro | JSON-native responses |
 | **DeepSeek** | v4-flash · v4-pro | |
@@ -95,6 +101,8 @@ Pick a provider in the sidebar, paste a key, done — keys never leave your brow
 | **AWS Bedrock** | Claude family | bearer-token auth |
 | **Azure OpenAI** | your deployments | |
 | **GitHub Models** | gpt-4o · gpt-4.1 | free-tier friendly |
+
+*The Agent needs function calling — it works with OpenAI, Anthropic, Gemini, Azure, Bedrock, GitHub Models and DeepSeek.*
 
 ---
 
@@ -213,9 +221,9 @@ Remember to add your domain to `ALLOWED_ORIGINS` in [worker/index.js](worker/ind
 
 ```text
 src/
-├── components/        # five pages: xcstrings · appstore · googleplay · screenshots · subscriptions
+├── components/        # six pages: agent · xcstrings · appstore · googleplay · screenshots · subscriptions
 ├── hooks/             # top-level state (useAppState, useTranslation, …)
-├── services/          # every external call: ASC, Google Play, 8 AI providers, AppCompete
+├── services/          # every external call: ASC, Google Play, 8 AI providers, AppCompete + the agent's tool registry
 └── utils/             # xcstrings parser, AES-GCM crypto
 ```
 
@@ -223,7 +231,7 @@ src/
 
 ## 🤝 Contributing
 
-Issues and PRs are welcome! Run `bun run lint` before submitting. The screenshots in this README are generated with `node scripts/take-screenshots.mjs` against the dev server.
+Issues and PRs are welcome! Run `bun run lint` before submitting. The screenshots in this README are generated with `node scripts/take-screenshots.mjs` against the dev server (`scripts/take-agent-screenshot.mjs` for the agent shot).
 
 ### Contributors
 
