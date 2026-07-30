@@ -10,14 +10,35 @@ import { useTranslation } from './hooks/useTranslation'
 import { useTranslationEditor } from './hooks/useTranslationEditor'
 import { useScreenshotData } from './hooks/useScreenshotData'
 
-const WelcomeScreen = lazy(() => import('./components/WelcomeScreen'))
-const AppStoreConnect = lazy(() => import('./components/appstore'))
-const GooglePlayConnect = lazy(() => import('./components/googleplay'))
-const ScreenshotMaker = lazy(() => import('./components/ScreenshotMaker'))
-const SubscriptionManager = lazy(() => import('./components/SubscriptionManager'))
-const AgentPage = lazy(() => import('./components/agent'))
-const XCStringsPage = lazy(() =>
-  import('./components/XCStringsPage').then((m) => ({ default: m.XCStringsPage }))
+// A failed chunk fetch (stale index.html right after a deploy) would otherwise
+// crash the whole tree into a black screen — reload once to pick up fresh assets.
+function lazyRetry(importFn, key) {
+  return lazy(() =>
+    importFn()
+      .then((m) => {
+        sessionStorage.removeItem(`lazy-retry:${key}`)
+        return m
+      })
+      .catch((err) => {
+        if (!sessionStorage.getItem(`lazy-retry:${key}`)) {
+          sessionStorage.setItem(`lazy-retry:${key}`, '1')
+          window.location.reload()
+          return new Promise(() => {}) // keep the fallback up until the reload happens
+        }
+        throw err
+      })
+  )
+}
+
+const WelcomeScreen = lazyRetry(() => import('./components/WelcomeScreen'), 'welcome')
+const AppStoreConnect = lazyRetry(() => import('./components/appstore'), 'appstore')
+const GooglePlayConnect = lazyRetry(() => import('./components/googleplay'), 'googleplay')
+const ScreenshotMaker = lazyRetry(() => import('./components/ScreenshotMaker'), 'screenshots')
+const SubscriptionManager = lazyRetry(() => import('./components/SubscriptionManager'), 'subscription')
+const AgentPage = lazyRetry(() => import('./components/agent'), 'agent')
+const XCStringsPage = lazyRetry(
+  () => import('./components/XCStringsPage').then((m) => ({ default: m.XCStringsPage })),
+  'xcstrings'
 )
 
 function PageLoader() {
