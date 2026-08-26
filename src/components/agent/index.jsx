@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { toast } from 'sonner'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -22,6 +22,7 @@ import {
   X,
   Sparkles,
   AlertTriangle,
+  Terminal,
 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -34,11 +35,15 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Separator } from '@/components/ui/separator'
 import { PROVIDERS } from '@/services/translationService'
 import { TOOL_CAPABLE_PROVIDERS, runAgentLoop, trimHistory } from '@/services/agentService'
 import { buildAgentTools, buildAgentSystemPrompt, truncateToolResult, AGENT_TOOL_COUNT, WRITE_TOOL_NAMES, fetchScreenshotsForLocale, NotConfiguredError } from '@/services/agentTools'
 import { hasValidToken as ascHasValidToken, getVersionLocalizations as ascGetVersionLocalizations } from '@/services/appStoreConnectService'
 import { decrypt } from '@/utils/crypto'
+import ApprovalPanel from './ApprovalPanel'
+import { AGENT_COMMANDS, isCommand, matchCommands, runCommand } from './commands'
 
 // Same key as AppSidebar / useAppStoreConnect — the .p8 saved encrypted with a password
 const ENCRYPTED_KEY_STORAGE = 'asc-encrypted-p8-key'
@@ -407,6 +412,14 @@ function ConfigNeededCard({ service, ready, unlockable, onUnlockKey, onRetry }) 
   )
 }
 
+// How a write tool call got its green light, shown as a small badge on the card
+const APPROVAL_LABELS = {
+  once: 'allowed once',
+  always: 'always allowed',
+  batch: 'batch allowed',
+  auto: 'auto-approved',
+}
+
 function ToolCallCard({ call, result, isAwaitingApproval, isRunning, writeTool, ascCredentials, ascUnlockable, onUnlockKey, serviceReady, onRetry }) {
   let StatusIcon = Minus
   let statusClass = 'text-muted-foreground/50'
@@ -415,6 +428,10 @@ function ToolCallCard({ call, result, isAwaitingApproval, isRunning, writeTool, 
     StatusIcon = ShieldAlert
     statusClass = 'text-amber-500'
     statusLabel = 'awaiting approval'
+  } else if (result?.approval === 'rejected') {
+    StatusIcon = XCircle
+    statusClass = 'text-muted-foreground'
+    statusLabel = 'rejected'
   } else if (result) {
     StatusIcon = result.isError ? XCircle : CheckCircle2
     statusClass = result.isError ? 'text-destructive' : 'text-emerald-500'
@@ -434,6 +451,11 @@ function ToolCallCard({ call, result, isAwaitingApproval, isRunning, writeTool, 
         {writeTool && (
           <Badge variant="outline" className="h-4 px-1.5 text-[10px] border-amber-500/50 text-amber-600 dark:text-amber-400">
             write
+          </Badge>
+        )}
+        {writeTool && APPROVAL_LABELS[result?.approval] && (
+          <Badge variant="outline" className="h-4 px-1.5 text-[10px] text-muted-foreground font-normal">
+            {APPROVAL_LABELS[result.approval]}
           </Badge>
         )}
         <span className="ml-auto flex items-center gap-1.5 text-[11px] text-muted-foreground shrink-0">
@@ -491,20 +513,46 @@ export default function AgentPage({ aiConfig, ascCredentials, onAscCredentialsCh
     resolveModel(provider, storedSettings.model, aiConfig.models[provider])
   )
   const [autoApprove, setAutoApprove] = useState(() => !!storedSettings.autoApprove)
+  // Write tools the user chose to never be asked about again ("Always allow")
+  const [alwaysAllow, setAlwaysAllow] = useState(() => {
+    const stored = Array.isArray(storedSettings.alwaysAllow) ? storedSettings.alwaysAllow : []
+    return new Set(stored.filter((name) => WRITE_TOOL_NAMES.has(name)))
+  })
 
   const [messages, setMessages] = useState(loadStoredMessages)
   const [input, setInput] = useState('')
   const [isRunning, setIsRunning] = useState(false)
-  const [pendingApproval, setPendingApproval] = useState(null) // { call, resolve }
+  const [pendingApproval, setPendingApproval] = useState(null) // { call, batch, resolve }
 
   const abortRef = useRef(null)
   const autoApproveRef = useRef(autoApprove)
+  const alwaysAllowRef = useRef(alwaysAllow)
+  // "Allow all in this turn" decision, scoped to one batch of tool calls
+  const batchDecisionRef = useRef(null) // { key, decision: 'allow' | 'reject' }
   const pendingApprovalRef = useRef(null)
   const bottomRef = useRef(null)
+  const textareaRef = useRef(null)
 
   useEffect(() => {
     autoApproveRef.current = autoApprove
   }, [autoApprove])
+
+  // The ref is written synchronously (not via the effect above) because a
+  // decision taken mid-run must apply to the very next tool call, before React
+  // has re-rendered.
+  const allowTools = (names) => {
+    const next = new Set(alwaysAllowRef.current)
+    for (const name of names) next.add(name)
+    alwaysAllowRef.current = next
+    setAlwaysAllow(next)
+  }
+
+  const askTools = (names) => {
+    const next = names ? new Set(alwaysAllowRef.current) : new Set()
+    if (names) for (const name of names) next.delete(name)
+    alwaysAllowRef.current = next
+    setAlwaysAllow(next)
+  }
 
   useEffect(() => {
     pendingApprovalRef.current = pendingApproval
@@ -519,14 +567,17 @@ export default function AgentPage({ aiConfig, ascCredentials, onAscCredentialsCh
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(AGENT_SETTINGS_KEY, JSON.stringify({ provider, model, autoApprove }))
+      window.localStorage.setItem(
+        AGENT_SETTINGS_KEY,
+        JSON.stringify({ provider, model, autoApprove, alwaysAllow: [...alwaysAllow] })
+      )
     } catch { /* non-fatal */ }
-  }, [provider, model, autoApprove])
+  }, [provider, model, autoApprove, alwaysAllow])
 
   // Abort any in-flight run when leaving the page
   useEffect(() => {
     return () => {
-      pendingApprovalRef.current?.resolve(false)
+      pendingApprovalRef.current?.resolve('reject')
       abortRef.current?.abort()
     }
   }, [])
@@ -606,41 +657,73 @@ export default function AgentPage({ aiConfig, ascCredentials, onAscCredentialsCh
   }
 
   const handleStop = () => {
-    pendingApprovalRef.current?.resolve(false)
+    pendingApprovalRef.current?.resolve('reject')
     setPendingApproval(null)
     abortRef.current?.abort()
   }
 
-  const handleApproval = (approved) => {
-    pendingApproval?.resolve(approved)
+  // decision: 'once' | 'always' | 'batch' | 'reject' | 'reject-batch'
+  const handleApproval = useCallback((decision) => {
+    pendingApprovalRef.current?.resolve(decision)
     setPendingApproval(null)
+  }, [])
+
+  // Decide whether a write call may run: auto-approve > always-allowed tool >
+  // a batch decision already taken for this turn > ask the user.
+  // Returns 'auto' | 'always' | 'batch' | 'once' | 'rejected' | 'rejected-batch'.
+  const resolveApproval = async (tool, call, batch, signal) => {
+    if (!tool.write) return 'auto'
+    if (autoApproveRef.current) return 'auto'
+    if (alwaysAllowRef.current.has(call.name)) return 'always'
+
+    const batchDecision = batch?.key && batchDecisionRef.current?.key === batch.key
+      ? batchDecisionRef.current.decision
+      : null
+    if (batchDecision) return batchDecision === 'allow' ? 'batch' : 'rejected-batch'
+
+    const decision = await new Promise((resolve) => setPendingApproval({ call, batch, resolve }))
+    if (signal.aborted) throw new DOMException('The agent run was stopped', 'AbortError')
+
+    if (decision === 'always') {
+      allowTools([call.name])
+      return 'always'
+    }
+    if (decision === 'batch') {
+      if (batch?.key) batchDecisionRef.current = { key: batch.key, decision: 'allow' }
+      return 'batch'
+    }
+    if (decision === 'reject-batch') {
+      if (batch?.key) batchDecisionRef.current = { key: batch.key, decision: 'reject' }
+      return 'rejected-batch'
+    }
+    return decision === 'once' ? 'once' : 'rejected'
   }
 
-  const executeToolCall = async (call, toolMap, signal) => {
+  const executeToolCall = async (call, toolMap, signal, batch) => {
     const tool = toolMap[call.name]
     if (!tool) {
       return { content: JSON.stringify({ error: `Unknown tool: ${call.name}` }), isError: true }
     }
-    if (tool.write && !autoApproveRef.current) {
-      const approved = await new Promise((resolve) => setPendingApproval({ call, resolve }))
-      if (signal.aborted) throw new DOMException('The agent run was stopped', 'AbortError')
-      if (!approved) {
-        return {
-          content: JSON.stringify({ error: 'Action rejected by the user. Do not retry — ask the user what to do instead.' }),
-          isError: true,
-        }
-      }
+
+    const approval = await resolveApproval(tool, call, batch, signal)
+    if (approval === 'rejected' || approval === 'rejected-batch') {
+      const error = approval === 'rejected-batch'
+        ? 'The user rejected this action and every remaining action of this turn. Do not retry — ask the user what to do instead.'
+        : 'Action rejected by the user. Do not retry — ask the user what to do instead.'
+      return { content: JSON.stringify({ error }), isError: true, approval: 'rejected' }
     }
+
     try {
       const result = await tool.execute(call.args || {})
       // Tools may attach images (screenshots) alongside their JSON payload
       const images = Array.isArray(result?.images) ? result.images : undefined
       const data = images ? { ...result, images: undefined } : result
-      return { content: truncateToolResult(JSON.stringify(data ?? { success: true })), isError: false, images }
+      return { content: truncateToolResult(JSON.stringify(data ?? { success: true })), isError: false, images, approval }
     } catch (error) {
       return {
         content: JSON.stringify({ error: error.message || String(error) }),
         isError: true,
+        approval,
         configError: error instanceof NotConfiguredError ? error.service : undefined,
       }
     }
@@ -654,12 +737,14 @@ export default function AgentPage({ aiConfig, ascCredentials, onAscCredentialsCh
     }
 
     const userMessage = { role: 'user', content: text }
-    const history = trimHistory([...baseMessages, userMessage])
+    // `note` messages are local (command output) — never sent to the model
+    const history = trimHistory([...baseMessages, userMessage].filter((m) => m.role !== 'note'))
     setMessages([...baseMessages, userMessage])
     setIsRunning(true)
 
     const controller = new AbortController()
     abortRef.current = controller
+    batchDecisionRef.current = null
 
     const ctx = { ascCredentials, gpCredentials, appCompeteConfig, aiConfig: agentConfig, xcstringsData, fileName }
     const tools = buildAgentTools(ctx)
@@ -676,7 +761,7 @@ export default function AgentPage({ aiConfig, ascCredentials, onAscCredentialsCh
         }),
         history,
         tools,
-        executeTool: (call) => executeToolCall(call, toolMap, controller.signal),
+        executeTool: (call, batch) => executeToolCall(call, toolMap, controller.signal, batch),
         onEvent: ({ message }) => {
           // Tag assistant messages that point at an unconfigured service, so the
           // config card stays mounted after the service is unlocked (and can
@@ -698,13 +783,38 @@ export default function AgentPage({ aiConfig, ascCredentials, onAscCredentialsCh
     } finally {
       setIsRunning(false)
       abortRef.current = null
+      batchDecisionRef.current = null
       setPendingApproval(null)
+    }
+  }
+
+  // Slash commands never reach the model — they are answered locally with a
+  // `note` message in the transcript.
+  const handleCommand = (text) => {
+    const result = runCommand(text, {
+      autoApprove,
+      alwaysAllow: alwaysAllowRef.current,
+      setAutoApprove,
+      allowTools,
+      askTools,
+      clearConversation: () => {
+        setMessages([])
+        toast.success('Conversation cleared')
+      },
+    })
+    if (result) {
+      setMessages((prev) => [...prev, { role: 'note', command: text, content: result.note, tone: result.tone }])
     }
   }
 
   const handleSend = () => {
     const text = input.trim()
     if (!text) return
+    if (isCommand(text)) {
+      setInput('')
+      handleCommand(text)
+      return
+    }
     setInput('')
     runMessage(text, messages)
   }
@@ -717,7 +827,20 @@ export default function AgentPage({ aiConfig, ascCredentials, onAscCredentialsCh
     runMessage(messages[lastUserIdx].content, messages.slice(0, lastUserIdx))
   }
 
+  // Command suggestions shown above the composer while typing "/…"
+  const commandMatches = useMemo(() => matchCommands(input), [input])
+
+  const completeCommand = (command) => {
+    setInput(`${command.name} `)
+    textareaRef.current?.focus()
+  }
+
   const handleKeyDown = (e) => {
+    if (e.key === 'Tab' && commandMatches.length > 0 && !/\s/.test(input.trim())) {
+      e.preventDefault()
+      completeCommand(commandMatches[0])
+      return
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
@@ -725,6 +848,12 @@ export default function AgentPage({ aiConfig, ascCredentials, onAscCredentialsCh
   }
 
   const noProviderConfigured = !capableProviders.some((id) => aiConfig.apiKeys[id])
+
+  const approvalMode = autoApprove
+    ? { label: 'Auto-approve', icon: <ShieldCheck className="h-3.5 w-3.5 text-amber-500" /> }
+    : alwaysAllow.size > 0
+      ? { label: `${alwaysAllow.size} always allowed`, icon: <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" /> }
+      : { label: 'Ask every write', icon: <ShieldAlert className="h-3.5 w-3.5 text-muted-foreground" /> }
 
   return (
     <div className="space-y-6">
@@ -797,13 +926,75 @@ export default function AgentPage({ aiConfig, ascCredentials, onAscCredentialsCh
               </SelectContent>
             </Select>
 
-            <div className="flex items-center gap-2">
-              <Switch id="agent-auto-approve" checked={autoApprove} onCheckedChange={setAutoApprove} />
-              <Label htmlFor="agent-auto-approve" className="text-xs text-muted-foreground cursor-pointer flex items-center gap-1">
-                {autoApprove ? <ShieldCheck className="h-3.5 w-3.5 text-amber-500" /> : <ShieldAlert className="h-3.5 w-3.5" />}
-                Auto-approve writes
-              </Label>
-            </div>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="outline" size="sm" className="h-9 gap-1.5 font-normal" aria-label="Write approvals">
+                  {approvalMode.icon}
+                  <span className="text-xs">{approvalMode.label}</span>
+                  <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-[330px] p-0">
+                <div className="px-3 py-2.5">
+                  <p className="text-sm font-medium">Write approvals</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    Which actions on App Store Connect / Google Play can run without asking.
+                  </p>
+                </div>
+                <Separator />
+                <div className="flex items-start gap-3 px-3 py-2.5">
+                  <Switch id="agent-auto-approve" className="mt-0.5" checked={autoApprove} onCheckedChange={setAutoApprove} />
+                  <div className="min-w-0 space-y-0.5">
+                    <Label htmlFor="agent-auto-approve" className="cursor-pointer text-xs font-medium">
+                      {autoApprove ? <ShieldCheck className="h-3.5 w-3.5 text-amber-500" /> : <ShieldAlert className="h-3.5 w-3.5" />}
+                      Auto-approve every write
+                    </Label>
+                    <p className="text-[11px] text-muted-foreground">
+                      Skips the prompt for all {WRITE_TOOL_NAMES.size} write tools, including ones you never allowed.
+                    </p>
+                  </div>
+                </div>
+                <Separator />
+                <div className="px-3 py-2.5 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-medium">Always allowed</p>
+                    {alwaysAllow.size > 0 && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 px-1.5 text-[11px] text-muted-foreground"
+                        onClick={() => askTools(null)}
+                      >
+                        Revoke all
+                      </Button>
+                    )}
+                  </div>
+                  {alwaysAllow.size === 0 ? (
+                    <p className="text-[11px] text-muted-foreground">
+                      Nothing yet. Hit <span className="font-medium">Always allow</span> on an approval, or type{' '}
+                      <code className="rounded bg-muted px-1 py-0.5 font-mono">/allow &lt;tool&gt;</code>.
+                    </p>
+                  ) : (
+                    <div className="max-h-44 space-y-1 overflow-y-auto">
+                      {[...alwaysAllow].sort().map((name) => (
+                        <div key={name} className="flex items-center gap-2 rounded-md bg-muted/50 px-2 py-1">
+                          <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                          <span className="truncate font-mono text-[11px]">{name}</span>
+                          <button
+                            type="button"
+                            onClick={() => askTools([name])}
+                            aria-label={`Ask again for ${name}`}
+                            className="ml-auto rounded p-0.5 text-muted-foreground/70 transition-colors hover:bg-background hover:text-foreground"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </PopoverContent>
+            </Popover>
 
             <Button
               variant="ghost"
@@ -852,10 +1043,35 @@ export default function AgentPage({ aiConfig, ascCredentials, onAscCredentialsCh
                       </button>
                     ))}
                   </div>
+                  <p className="mt-4 text-[11px] text-muted-foreground">
+                    Type <code className="rounded bg-muted px-1 py-0.5 font-mono">/help</code> for commands
+                    ({AGENT_COMMANDS.map((c) => c.name).join(', ')}).
+                  </p>
                 </div>
               )}
 
               {messages.map((m, i) => {
+                if (m.role === 'note') {
+                  return (
+                    <div key={i} className="flex justify-center">
+                      <div
+                        className={`w-full max-w-[92%] rounded-lg border px-3 py-2 text-xs ${
+                          m.tone === 'error'
+                            ? 'border-destructive/40 bg-destructive/5 text-destructive'
+                            : 'border-border/60 bg-muted/30 text-muted-foreground'
+                        }`}
+                      >
+                        {m.command && (
+                          <div className="mb-1 flex items-center gap-1.5 font-mono text-[11px] text-foreground/70">
+                            <Terminal className="h-3 w-3" />
+                            {m.command}
+                          </div>
+                        )}
+                        <Markdown>{m.content}</Markdown>
+                      </div>
+                    </div>
+                  )
+                }
                 if (m.role === 'user') {
                   return (
                     <div key={i} className="flex justify-end">
@@ -920,38 +1136,46 @@ export default function AgentPage({ aiConfig, ascCredentials, onAscCredentialsCh
           </ScrollArea>
 
           {pendingApproval && (
-            <div className="rounded-lg border border-amber-500/50 bg-amber-500/5 p-3 space-y-2">
-              <div className="flex items-center gap-2 text-sm font-medium text-amber-600 dark:text-amber-400">
-                <ShieldAlert className="h-4 w-4" />
-                The agent wants to run <span className="font-mono">{pendingApproval.call.name}</span>
-              </div>
-              <pre className="text-[11px] font-mono bg-background/60 rounded-md p-2 overflow-x-auto max-h-36 overflow-y-auto whitespace-pre-wrap break-all">{prettyJson(pendingApproval.call.args || {})}</pre>
-              <div className="flex justify-end gap-2">
-                <Button variant="outline" size="sm" onClick={() => handleApproval(false)}>
-                  <XCircle className="h-4 w-4 mr-1.5" />
-                  Reject
-                </Button>
-                <Button size="sm" onClick={() => handleApproval(true)}>
-                  <CheckCircle2 className="h-4 w-4 mr-1.5" />
-                  Approve
-                </Button>
-              </div>
-            </div>
+            <ApprovalPanel
+              pending={pendingApproval}
+              alwaysAllow={alwaysAllow}
+              onDecide={handleApproval}
+              prettyJson={prettyJson}
+            />
           )}
 
           <div className="rounded-xl border border-border/60 bg-muted/30 transition-colors focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/20">
+            {commandMatches.length > 0 && (
+              <div className="border-b border-border/60 p-1">
+                {commandMatches.map((c, idx) => (
+                  <button
+                    key={c.name}
+                    type="button"
+                    onClick={() => completeCommand(c)}
+                    className={`flex w-full items-baseline gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted ${idx === 0 ? 'bg-muted/60' : ''}`}
+                  >
+                    <span className="font-mono text-xs">{c.usage}</span>
+                    <span className="truncate text-[11px] text-muted-foreground">{c.description}</span>
+                    {idx === 0 && (
+                      <kbd className="ml-auto shrink-0 rounded border border-border px-1 text-[9px] leading-[14px] text-muted-foreground">Tab</kbd>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
             <Textarea
+              ref={textareaRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder='e.g. "Translate the description of my latest version to Spanish and update it"'
+              placeholder='e.g. "Translate the description of my latest version to Spanish and update it" — or / for commands'
               rows={2}
               className="resize-none border-0 bg-transparent shadow-none text-sm focus-visible:ring-0 min-h-[64px]"
               disabled={isRunning}
             />
             <div className="flex items-center justify-between gap-2 px-3 pb-2.5">
               <span className="text-[11px] text-muted-foreground">
-                Enter to send · Shift+Enter for a new line
+                Enter to send · Shift+Enter for a new line · <span className="font-mono">/</span> for commands
               </span>
               {isRunning ? (
                 <Button variant="destructive" size="sm" className="h-8" onClick={handleStop}>
@@ -972,7 +1196,11 @@ export default function AgentPage({ aiConfig, ascCredentials, onAscCredentialsCh
             </div>
           </div>
           <p className="text-[11px] text-muted-foreground">
-            Write actions (updates to App Store Connect / Google Play) {autoApprove ? 'run automatically — auto-approve is ON.' : 'require your approval before they run.'}
+            {autoApprove
+              ? 'Write actions (updates to App Store Connect / Google Play) run automatically — auto-approve is ON.'
+              : alwaysAllow.size > 0
+                ? `Write actions require your approval — except ${alwaysAllow.size} tool${alwaysAllow.size > 1 ? 's' : ''} you always allowed (${[...alwaysAllow].sort().join(', ')}).`
+                : 'Write actions (updates to App Store Connect / Google Play) require your approval before they run. Approve once, always, or the whole turn at a time.'}
           </p>
         </CardContent>
       </Card>

@@ -595,10 +595,15 @@ export function buildAgentTools(ctx) {
 }
 
 // Static views of the registry (executors are never invoked here)
-export const AGENT_TOOL_COUNT = buildAgentTools({}).length
-export const WRITE_TOOL_NAMES = new Set(
-  buildAgentTools({}).filter((t) => t.write).map((t) => t.name)
-)
+const TOOL_METADATA = buildAgentTools({}).map((t) => ({
+  name: t.name,
+  description: t.description,
+  write: !!t.write,
+}))
+
+export const AGENT_TOOL_LIST = TOOL_METADATA
+export const AGENT_TOOL_COUNT = TOOL_METADATA.length
+export const WRITE_TOOL_NAMES = new Set(TOOL_METADATA.filter((t) => t.write).map((t) => t.name))
 
 /**
  * System prompt for the agent, reflecting what is currently connected.

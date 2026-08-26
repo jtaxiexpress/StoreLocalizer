@@ -4,7 +4,8 @@
 //   { role: 'user',      content: string }
 //   { role: 'assistant', content: string, toolCalls: [{ id, name, args }] }
 //   { role: 'tool',      toolCallId: string, name: string, content: string, isError: boolean,
-//                        images?: [{ url, name }], configError?: string }
+//                        images?: [{ url, name }], configError?: string,
+//                        approval?: 'once' | 'always' | 'batch' | 'auto' | 'rejected' }
 //
 // A tool result may attach images (e.g. App Store screenshots). Adapters for
 // vision-capable providers feed them to the model; the others just ignore them.
@@ -441,7 +442,10 @@ export function trimHistory(messages, maxMessages = 40) {
  * @param {string}   options.systemPrompt
  * @param {Array}    options.history      - neutral messages (see header comment)
  * @param {Array}    options.tools        - [{ name, description, parameters, write, execute }]
- * @param {Function} options.executeTool  - async ({ id, name, args }) => { content: string, isError: boolean }
+ * @param {Function} options.executeTool  - async ({ id, name, args }, batch) => { content, isError, approval? }
+ *                                          `batch` is { key, calls, index } describing the tool calls the
+ *                                          model requested in this turn — it lets the UI offer a single
+ *                                          "allow all in this turn" decision instead of one prompt per call.
  * @param {Function} [options.onEvent]    - ({ type, message }) called as each new message is produced
  * @param {AbortSignal} [options.signal]
  * @param {number}   [options.maxIterations]
@@ -466,9 +470,15 @@ export async function runAgentLoop({
 
     if (!assistant.toolCalls?.length) return messages
 
-    for (const call of assistant.toolCalls) {
+    const calls = assistant.toolCalls
+    // Stable id for this turn's batch of tool calls, so an "allow all in this
+    // turn" decision can be scoped to it (call ids are unique per turn).
+    const batchKey = calls[0]?.id || `batch_${iteration}`
+
+    for (let index = 0; index < calls.length; index++) {
+      const call = calls[index]
       if (signal?.aborted) throw new DOMException('The agent run was stopped', 'AbortError')
-      const result = await executeTool(call)
+      const result = await executeTool(call, { key: batchKey, calls, index })
       const toolMessage = {
         role: 'tool',
         toolCallId: call.id,
@@ -477,6 +487,7 @@ export async function runAgentLoop({
         isError: !!result.isError,
         images: result.images,
         configError: result.configError,
+        approval: result.approval,
       }
       messages.push(toolMessage)
       onEvent?.({ type: 'tool_result', message: toolMessage })
